@@ -21,55 +21,50 @@ def process
   puts "Please enter the offline playlist name: "
   offline_playlist_name = gets.chomp
 
-  code = get_code
+  puts "Please follow the link: #{build_auth_url}"
+  puts "Paste the URL you were redirected to:"
+
+  code = gets.chomp.split("code=").last
   puts "Code: #{code}"
   puts "Getting access token"
-  access_token_response = get_access_token(code)
-  access_token = access_token_response['access_token']
-
-  puts "Access token: #{access_token}"
+  access_token_response = request_access_token(code)
+  @config["ACCESS_TOKEN"] = access_token_response['access_token']
   puts "Getting podcasts"
-  podcasts_response = get_podcasts(access_token)
+  podcasts_response = api_request(url: URI("#{API_URL}/me/shows"))
   podcast = podcasts_response['items'].find { |podcast| podcast['show']['name'] == podcast_name }
-
   podcast_id = podcast['show']['id']
-  puts "Podcast name: #{podcast_name}"
-  puts "Podcast id: #{podcast_id}"
   puts "Getting podcast episodes"
-  episodes_response = get_podcast_episodes(access_token, podcast_id)
-  episode_uris = episodes_response['items'].map { |episode| episode['uri'] }
-  puts "Received #{episode_uris.length} episodes"
+  episodes_response = api_request(url: URI("#{API_URL}/shows/#{podcast_id}/episodes"))
+  uris = episodes_response['items'].map { |episode| episode['uri'] }
+  puts "Received #{uris.length} episodes"
   puts "Getting playlists"
-  playlists_response = get_playlists(access_token)
+  playlists_response = api_request(url: URI("#{API_URL}/me/playlists"))
   offline_playlist = playlists_response['items'].find { |playlist| playlist['name'] == offline_playlist_name }
-  offline_playlist_id = offline_playlist['id']
-  puts "Offline playlist name: #{offline_playlist_name}"
-  puts "Offline playlist id: #{offline_playlist_id}"
+  playlist_id = offline_playlist['id']
   puts "Adding episodes to offline playlist"
-  add_episodes_to_offline_playlist(episode_uris, offline_playlist_id, access_token)
+  api_request(
+    method: :post,
+    url: URI("#{API_URL}/playlists/#{playlist_id}/tracks"),
+    body: { uris: uris },
+  )
   puts "Episodes added to offline playlist"
 end
 
-### AUTHENTICATION START
-def get_code
+### AUTHENTICATION
+def build_auth_url
   params = {
-    client_id: @config['CLIENT_ID'],
     response_type: 'code',
+    client_id: @config['CLIENT_ID'],
     redirect_uri: @config['REDIRECT_URI'],
     scope: SCOPES.join(' ')
   }
-  url = URI("#{ACCOUNT_URL}/authorize?#{URI.encode_www_form(params)}")
-  puts "please visit: #{url}"
-  puts "please enter the URL: "
-  gets.chomp.split("code=").last
+  URI("#{ACCOUNT_URL}/authorize?#{URI.encode_www_form(params)}")
 end
 
-def get_access_token(code)
+def request_access_token(code)
   url = URI("#{ACCOUNT_URL}/api/token")
-
   https = Net::HTTP.new(url.host, url.port)
   https.use_ssl = true
-
   request = Net::HTTP::Post.new(url)
   request["Content-Type"] = "application/x-www-form-urlencoded"
   request["Authorization"] = "Basic #{Base64.encode64("#{@config['CLIENT_ID']}:#{@config['CLIENT_SECRET']}").gsub("\n", '')}"
@@ -88,69 +83,17 @@ def get_access_token(code)
   end
   JSON.parse(response_body)
 end
-### AUTHENTICATION END
 
-def get_podcasts(access_token)
-  url = URI("#{API_URL}/me/shows")
+def api_request(url:, method: :get, body: nil)
   https = Net::HTTP.new(url.host, url.port)
   https.use_ssl = true
-
-  request = Net::HTTP::Get.new(url)
-  request["Authorization"] = "Bearer #{access_token}"
-  response = https.request(request)
-  response_body = response.read_body
-  if response.code != '200'
-    raise "Error: #{response_body}"
-  end
-  JSON.parse(response_body)
-end
-
-def get_podcast_episodes(access_token, podcast_id)
-  url = URI("#{API_URL}/shows/#{podcast_id}/episodes")
-
-  https = Net::HTTP.new(url.host, url.port)
-  https.use_ssl = true
-
-  request = Net::HTTP::Get.new(url)
-  request["Authorization"] = "Bearer #{access_token}"
-
-  response = https.request(request)
-  response_body = response.read_body
-  if response.code != '200'
-    raise "Error: #{response_body}"
-  end
-  JSON.parse(response_body)
-end
-
-def get_playlists(access_token)
-  url = URI("#{API_URL}/me/playlists")
-  https = Net::HTTP.new(url.host, url.port)
-  https.use_ssl = true
-  request = Net::HTTP::Get.new(url)
-  request["Authorization"] = "Bearer #{access_token}"
-  response = https.request(request)
-  response_body = response.read_body
-  if response.code != '200'
-    raise "Error: #{response_body}"
-  end
-  JSON.parse(response_body)
-end
-
-def add_episodes_to_offline_playlist(uris, playlist_id, access_token)
-  url = URI("#{API_URL}/playlists/#{playlist_id}/tracks")
-
-  https = Net::HTTP.new(url.host, url.port)
-  https.use_ssl = true
-
-  request = Net::HTTP::Post.new(url)
+  request = Net::HTTP.const_get(method.to_s.capitalize).new(url)
   request["Content-Type"] = "application/json"
-  request["Authorization"] = "Bearer #{access_token}"
-  request.body = JSON.dump({
-    uris: uris
-  })
+  request["Authorization"] = "Bearer #{@config["ACCESS_TOKEN"]}"
+  request.body = JSON.dump(body) if body
   response = https.request(request)
   response_body = response.read_body
-  if response.code != '201'
+  unless response.code.match? /^20\d$/
     raise "Error: #{response_body}"
   end
   JSON.parse(response_body)

@@ -33,21 +33,25 @@ def process
   podcasts_response = api_request(url: URI("#{API_URL}/me/shows"))
   podcast = podcasts_response['items'].find { |podcast| podcast['show']['name'] == podcast_name }
   podcast_id = podcast['show']['id']
-  puts "Getting podcast episodes"
-  episodes_response = api_request(url: URI("#{API_URL}/shows/#{podcast_id}/episodes"))
-  uris = episodes_response['items'].map { |episode| episode['uri'] }
-  puts "Received #{uris.length} episodes"
   puts "Getting playlists"
   playlists_response = api_request(url: URI("#{API_URL}/me/playlists"))
   offline_playlist = playlists_response['items'].find { |playlist| playlist['name'] == offline_playlist_name }
   playlist_id = offline_playlist['id']
   puts "Adding episodes to offline playlist"
-  api_request(
-    method: :post,
-    url: URI("#{API_URL}/playlists/#{playlist_id}/tracks"),
-    body: { uris: uris },
-  )
-  puts "Episodes added to offline playlist"
+  episodes_url = "#{API_URL}/shows/#{podcast_id}/episodes?limit=50"
+  total_added = 0
+  while episodes_url
+    episodes_response = api_request(url: URI(episodes_url))
+    uris = episodes_response['items'].map { |episode| episode['uri'] }
+    episodes_url = episodes_response['next']
+    total_added += uris.size
+    puts "Adding #{total_added}/#{episodes_response['total']} episodes"
+    api_request(
+      method: :post,
+      url: URI("#{API_URL}/playlists/#{playlist_id}/tracks"),
+      body: { uris: uris },
+    )
+  end
 end
 
 ### AUTHENTICATION
